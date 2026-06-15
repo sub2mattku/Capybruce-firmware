@@ -13,11 +13,6 @@ static const uint8_t RX = 2;
 #define SERIAL_RX 2
 #define SERIAL_TX 1
 #define USB_as_HID 1
-// Legacy Arduino SPI pin constants (required by arduinoespressif32 core)
-static const uint8_t MOSI = 12;
-static const uint8_t MISO = 11;
-static const uint8_t SCK  = 13;
-static const uint8_t SS   = 3;
 
 // ============================================================================
 // I2C (Grove / PMU)
@@ -29,23 +24,28 @@ static const uint8_t SCL = 48;
 #define GROVE_SCL 48
 
 // ============================================================================
+// LEGACY ARDUINO SPI CONSTANTS (required by arduinoespressif32 core)
+// ============================================================================
+static const uint8_t SS   = 3;
+static const uint8_t MOSI = 12;
+static const uint8_t MISO = 11;
+static const uint8_t SCK  = 13;
+
+// ============================================================================
 // KY-040 ROTARY ENCODER
 // ============================================================================
 #define BTN_ALIAS "\"OK\""
 #define HAS_ENCODER
 
-#define ENC_CLK 17            // GPIO 17 - Clock / Phase A
-#define ENC_DT  18            // GPIO 18 - Data / Phase B
-#define ENC_SW  8             // GPIO 8  - Tactile Button Switch
+#define ENC_CLK 17
+#define ENC_DT  18
+#define ENC_SW  8
 
-// Map rotation to directional buttons
-// CW rotation = CLK triggers = R_BTN / Next / Down
-// CCW rotation = DT triggers = L_BTN / Prev / Up
 #define R_BTN   ENC_CLK
 #define L_BTN   ENC_DT
 #define SEL_BTN ENC_SW
-#define UP_BTN  ENC_DT        // CCW = up
-#define DW_BTN  ENC_CLK       // CW = down
+#define UP_BTN  ENC_DT
+#define DW_BTN  ENC_CLK
 #define BTN_ACT LOW
 
 // ============================================================================
@@ -70,13 +70,13 @@ static const uint8_t SCL = 48;
 #define TFT_HEIGHT 320
 #define TFT_BACKLIGHT_ON 1
 
-#define TFT_BL  6             // GPIO 6
-#define TFT_RST 16            // GPIO 16
-#define TFT_DC  15            // GPIO 15
-#define TFT_MISO 11           // GPIO 11
-#define TFT_MOSI 12           // GPIO 12
-#define TFT_SCLK 13           // GPIO 13
-#define TFT_CS  7             // GPIO 7
+#define TFT_BL  6
+#define TFT_RST 16
+#define TFT_DC  15
+#define TFT_MISO 11
+#define TFT_MOSI 12
+#define TFT_SCLK 13
+#define TFT_CS  7
 
 #define TOUCH_CS -1
 #define SMOOTH_FONT 1
@@ -88,18 +88,43 @@ static const uint8_t SCL = 48;
 // ============================================================================
 // MICROSD CARD SPI BUS (Dedicated - separate from display)
 // ============================================================================
-#define SDCARD_CS   3         // GPIO 3
-#define SDCARD_SCK  40        // GPIO 40
-#define SDCARD_MISO 42        // GPIO 42 - separate from TFT_MISO
-#define SDCARD_MOSI 41        // GPIO 41
+#define SDCARD_CS   3
+#define SDCARD_SCK  40
+#define SDCARD_MISO 42
+#define SDCARD_MOSI 41
 
 // ============================================================================
-// SPI ALIASES (Display bus)
+// SPI ALIASES (Display bus - for libs that need them)
 // ============================================================================
 #define SPI_SCK_PIN  13
 #define SPI_MOSI_PIN 12
 #define SPI_MISO_PIN 11
 #define SPI_SS_PIN   43
+
+// ============================================================================
+// RF MODULES (disabled but defined for compile compat)
+// ============================================================================
+#define USE_CC1101_VIA_SPI
+#define CC1101_GDO0_PIN 9
+#define CC1101_GDO2_PIN 10
+#define CC1101_SS_PIN 46
+#define CC1101_MOSI_PIN SPI_MOSI_PIN
+#define CC1101_SCK_PIN SPI_SCK_PIN
+#define CC1101_MISO_PIN SPI_MISO_PIN
+
+#define USE_NRF24_VIA_SPI
+#define NRF24_CE_PIN 21
+#define NRF24_SS_PIN 14
+#define NRF24_MOSI_PIN SPI_MOSI_PIN
+#define NRF24_SCK_PIN SPI_SCK_PIN
+#define NRF24_MISO_PIN SPI_MISO_PIN
+
+// ============================================================================
+// MISC
+// ============================================================================
+#define FP 1
+#define FM 2
+#define FG 3
 
 // ============================================================================
 // RGB LED
@@ -135,7 +160,5 @@ static const uint8_t SCL = 48;
 #define IO_EXP_VIBRO 2
 #define IO_EXP_CC_RX 7
 #define IO_EXP_CC_TX 12
-static const uint8_t SS = SDCARD_CS;  // or TFT_CS, whichever makes sense as default
-
 
 #endif /* Pins_Arduino_h */
