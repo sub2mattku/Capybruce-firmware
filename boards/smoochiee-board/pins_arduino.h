@@ -130,5 +130,7 @@ static const uint8_t SCL = 48;
 #define IO_EXP_VIBRO 2
 #define IO_EXP_CC_RX 7
 #define IO_EXP_CC_TX 12
+static const uint8_t SS = SDCARD_CS;  // or TFT_CS, whichever makes sense as default
+
 
 #endif /* Pins_Arduino_h */
