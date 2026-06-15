@@ -13,6 +13,11 @@ static const uint8_t RX = 2;
 #define SERIAL_RX 2
 #define SERIAL_TX 1
 #define USB_as_HID 1
+// Legacy Arduino SPI pin constants (required by arduinoespressif32 core)
+static const uint8_t MOSI = 12;
+static const uint8_t MISO = 11;
+static const uint8_t SCK  = 13;
+static const uint8_t SS   = 3;
 
 // ============================================================================
 // I2C (Grove / PMU)
