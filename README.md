@@ -1,3 +1,11 @@
+# ⚠️ CapyBruce — Smoochie Hardware Fork
+
+**This is not official Bruce firmware.**  
+Custom ESP32-S3 build for the Smoochie board with KY-040 rotary encoder.
+
+**Official project:** [pr3y/Bruce](https://github.com/pr3y/Bruce)
+
+
 ![Bruce Main Menu](./media/pictures/bruce_banner.jpg)
 
 # :shark: Bruce
