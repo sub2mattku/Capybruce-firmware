@@ -13,25 +13,61 @@
 XPowersPPM PPM;
 #endif
 
+// ============================================================================
+// KY-040 ENCODER STATE
+// ============================================================================
+volatile int encoderPos = 0;
+volatile int lastEncoderPos = 0;
+volatile uint8_t lastCLK = 0;
+
+// ============================================================================
+// INTERRUPT SERVICE ROUTINES
+// ============================================================================
+
+void IRAM_ATTR onEncoderCLK() {
+    uint8_t clk = digitalRead(ENC_CLK);
+    uint8_t dt = digitalRead(ENC_DT);
+    
+    if (clk == HIGH && lastCLK == LOW) {
+        if (dt == HIGH) {
+            encoderPos--; // CCW
+        } else {
+            encoderPos++; // CW
+        }
+    }
+    lastCLK = clk;
+}
+
+void IRAM_ATTR onEncoderSW() {
+    // Handled in polling loop for debounce
+}
+
+// ============================================================================
+// SETUP
+// ============================================================================
+
 void _setup_gpio() {
+    // --- KY-040 Encoder Pins ---
+    pinMode(ENC_CLK, INPUT_PULLUP);
+    pinMode(ENC_DT, INPUT_PULLUP);
+    pinMode(ENC_SW, INPUT_PULLUP);
+    
+    lastCLK = digitalRead(ENC_CLK);
+    
+    attachInterrupt(digitalPinToInterrupt(ENC_CLK), onEncoderCLK, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENC_SW), onEncoderSW, CHANGE);
 
-    pinMode(UP_BTN, INPUT); // Sets the power btn as an INPUT
-    pinMode(SEL_BTN, INPUT);
-    pinMode(DW_BTN, INPUT);
-    pinMode(R_BTN, INPUT);
-    pinMode(L_BTN, INPUT);
-
+    // --- RF Module SPI CS (keep for compile compatibility) ---
     pinMode(CC1101_SS_PIN, OUTPUT);
     pinMode(NRF24_SS_PIN, OUTPUT);
-
     digitalWrite(CC1101_SS_PIN, HIGH);
     digitalWrite(NRF24_SS_PIN, HIGH);
-    // Starts SPI instance for CC1101 and NRF24 with CS pins blocking communication at start
 
+    // --- I2C & PMU ---
     bruceConfigPins.rfModule = CC1101_SPI_MODULE;
     bruceConfigPins.irRx = RXLED;
     Wire.setPins(GROVE_SDA, GROVE_SCL);
-    // Wire.begin();
+    
     bool pmu_ret = false;
     Wire.begin(GROVE_SDA, GROVE_SCL);
     pmu_ret = PPM.init(Wire, GROVE_SDA, GROVE_SCL, BQ25896_SLAVE_ADDRESS);
@@ -50,8 +86,8 @@ void _setup_gpio() {
         PPM.enableCharge();
     }
 }
+
 bool isCharging() {
-    // PPM.disableBatterPowerPath();
     return PPM.isCharging();
 }
 
@@ -64,7 +100,7 @@ int getBattery() {
 
     if (PPM.isCharging() && percent >= 97) {
         PPM.disableBatLoad();
-        percent = 95; // estimate still charging
+        percent = 95;
     }
 
     if (PPM.isChargeDone()) { percent = 100; }
@@ -74,8 +110,6 @@ int getBattery() {
 
 /*********************************************************************
 ** Function: setBrightness
-** location: settings.cpp
-** set brightness value
 **********************************************************************/
 void _setBrightness(uint8_t brightval) {
     if (brightval == 0) {
@@ -86,64 +120,113 @@ void _setBrightness(uint8_t brightval) {
     }
 }
 
-/*********************************************************************
-** Function: InputHandler
-** Handles the variables PrevPress, NextPress, SelPress, AnyKeyPress and EscPress
-**********************************************************************/
+// ============================================================================
+// ENCODER INPUT HANDLER
+// ============================================================================
+// CW rotation  -> R_BTN / DW_BTN -> Next / Down
+// CCW rotation -> L_BTN / UP_BTN -> Prev / Up
+// Short click SW -> SEL_BTN -> Select
+// Long press SW -> Esc -> Back / Exit
+// ============================================================================
+
 void InputHandler(void) {
     static unsigned long tm = 0;
-    if (millis() - tm < 200 && !LongPress) return;
-    bool _u = digitalRead(UP_BTN);
-    bool _d = digitalRead(DW_BTN);
-    bool _l = digitalRead(L_BTN);
-    bool _r = digitalRead(R_BTN);
-    bool _s = digitalRead(SEL_BTN);
+    static unsigned long swPressTime = 0;
+    static bool swWasPressed = false;
+    
+    if (millis() - tm < 50 && !LongPress) return;
+    tm = millis();
 
-    if (!_s || !_u || !_d || !_r || !_l) {
+    // --- Process Encoder Rotation ---
+    noInterrupts();
+    int currentPos = encoderPos;
+    interrupts();
+    
+    int delta = currentPos - lastEncoderPos;
+    
+    if (delta != 0) {
+        if (!wakeUpScreen()) AnyKeyPress = true;
+        else {
+            lastEncoderPos = currentPos;
+            return;
+        }
+        
+        if (delta > 0) {
+            // Clockwise
+            NextPress = true;
+            DownPress = true;
+            NextPagePress = true;
+        } else {
+            // Counter-clockwise
+            PrevPress = true;
+            UpPress = true;
+            PrevPagePress = true;
+        }
+        
+        lastEncoderPos = currentPos;
+    }
+
+    // --- Process Encoder Button (SW) ---
+    bool swCurrent = !digitalRead(ENC_SW); // Active LOW
+    
+    if (swCurrent && !swWasPressed) {
+        swPressTime = millis();
+        swWasPressed = true;
+        if (!wakeUpScreen()) AnyKeyPress = true;
+        else return;
+    }
+    
+    if (swCurrent && swWasPressed) {
+        if (millis() - swPressTime > 800) {
+            EscPress = true;
+            SelPress = false;
+            LongPress = true;
+        }
+    }
+    
+    if (!swCurrent && swWasPressed) {
+        if (millis() - swPressTime < 800 && millis() - swPressTime > 50) {
+            SelPress = true;
+        }
+        swWasPressed = false;
+        LongPress = false;
+    }
+
+    // --- Legacy button polling (for any code still reading raw pins) ---
+    // These read the encoder pins directly, so rotation triggers them
+    bool _l = digitalRead(L_BTN);  // ENC_DT
+    bool _r = digitalRead(R_BTN);  // ENC_CLK
+    bool _s = digitalRead(SEL_BTN); // ENC_SW
+
+    if (!_s) {
         tm = millis();
         if (!wakeUpScreen()) AnyKeyPress = true;
         else return;
     }
-    if (!_l) { PrevPress = true; }
-    if (!_r) { NextPress = true; }
-    if (!_u) {
-        UpPress = true;
-        PrevPagePress = true;
-    }
-    if (!_d) {
-        DownPress = true;
-        NextPagePress = true;
-    }
-    if (!_s) { SelPress = true; }
-    if (!_l && !_r) {
-        EscPress = true;
-        NextPress = false;
-        PrevPress = false;
-    }
+    
+    // Note: _l and _r here are raw pin states, not rotation events
+    // The encoder ISR handles rotation, so these are just for
+    // code that explicitly calls digitalRead(L_BTN) / digitalRead(R_BTN)
 }
 
 /*********************************************************************
 ** Function: powerOff
-** location: mykeyboard.cpp
-** Turns off the device (or try to)
 **********************************************************************/
 void powerOff() {
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)SEL_BTN, BTN_ACT);
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)ENC_SW, BTN_ACT);
     esp_deep_sleep_start();
 }
 
 /*********************************************************************
 ** Function: checkReboot
-** location: mykeyboard.cpp
-** Btn logic to turn off the device (name is odd btw)
 **********************************************************************/
 void checkReboot() {
     int countDown = 0;
-    /* Long press power off */
-    if (digitalRead(L_BTN) == BTN_ACT && digitalRead(R_BTN) == BTN_ACT) {
+    
+    // Long press encoder SW to power off
+    if (digitalRead(ENC_SW) == BTN_ACT) {
         uint32_t time_count = millis();
-        while (digitalRead(L_BTN) == BTN_ACT && digitalRead(R_BTN) == BTN_ACT) {
-            // Display poweroff bar only if holding button
+        while (digitalRead(ENC_SW) == BTN_ACT) {
             if (millis() - time_count > 500) {
                 if (countDown == 0) {
                     int textWidth = tft.textWidth("PWR OFF IN 3/3", 1);
@@ -156,15 +239,14 @@ void checkReboot() {
                     tft.drawCentreString("PWR OFF IN " + String(countDown) + "/3", tftWidth / 2, 12, 1);
                 else {
                     tft.fillScreen(bruceConfig.bgColor);
-                    while (digitalRead(L_BTN) == BTN_ACT || digitalRead(R_BTN) == BTN_ACT);
+                    while (digitalRead(ENC_SW) == BTN_ACT);
                     delay(200);
                     powerOff();
                 }
                 delay(10);
             }
         }
-
-        // Clear text after releasing the button
+        
         delay(30);
         if (millis() - time_count > 500) {
             tft.fillRect(60, 12, tftWidth - 60, tft.fontHeight(1), bruceConfig.bgColor);
