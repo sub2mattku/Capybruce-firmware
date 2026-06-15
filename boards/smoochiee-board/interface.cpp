@@ -6,7 +6,6 @@
 ** Description:   initial setup for the device
 ***************************************************************************************/
 
-// Power handler for battery detection
 #ifdef XPOWERS_CHIP_BQ25896
 #include <Wire.h>
 #include <XPowersLib.h>
@@ -30,9 +29,9 @@ void IRAM_ATTR onEncoderCLK() {
     
     if (clk == HIGH && lastCLK == LOW) {
         if (dt == HIGH) {
-            encoderPos--; // CCW
+            encoderPos--;
         } else {
-            encoderPos++; // CW
+            encoderPos++;
         }
     }
     lastCLK = clk;
@@ -47,7 +46,6 @@ void IRAM_ATTR onEncoderSW() {
 // ============================================================================
 
 void _setup_gpio() {
-    // --- KY-040 Encoder Pins ---
     pinMode(ENC_CLK, INPUT_PULLUP);
     pinMode(ENC_DT, INPUT_PULLUP);
     pinMode(ENC_SW, INPUT_PULLUP);
@@ -57,13 +55,11 @@ void _setup_gpio() {
     attachInterrupt(digitalPinToInterrupt(ENC_CLK), onEncoderCLK, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_SW), onEncoderSW, CHANGE);
 
-    // --- RF Module SPI CS (keep for compile compatibility) ---
     pinMode(CC1101_SS_PIN, OUTPUT);
     pinMode(NRF24_SS_PIN, OUTPUT);
     digitalWrite(CC1101_SS_PIN, HIGH);
     digitalWrite(NRF24_SS_PIN, HIGH);
 
-    // --- I2C & PMU ---
     bruceConfigPins.rfModule = CC1101_SPI_MODULE;
     bruceConfigPins.irRx = RXLED;
     Wire.setPins(GROVE_SDA, GROVE_SCL);
@@ -120,15 +116,9 @@ void _setBrightness(uint8_t brightval) {
     }
 }
 
-// ============================================================================
-// ENCODER INPUT HANDLER
-// ============================================================================
-// CW rotation  -> R_BTN / DW_BTN -> Next / Down
-// CCW rotation -> L_BTN / UP_BTN -> Prev / Up
-// Short click SW -> SEL_BTN -> Select
-// Long press SW -> Esc -> Back / Exit
-// ============================================================================
-
+/*********************************************************************
+** Function: InputHandler
+**********************************************************************/
 void InputHandler(void) {
     static unsigned long tm = 0;
     static unsigned long swPressTime = 0;
@@ -137,7 +127,7 @@ void InputHandler(void) {
     if (millis() - tm < 50 && !LongPress) return;
     tm = millis();
 
-    // --- Process Encoder Rotation ---
+    // --- Encoder Rotation ---
     noInterrupts();
     int currentPos = encoderPos;
     interrupts();
@@ -152,12 +142,10 @@ void InputHandler(void) {
         }
         
         if (delta > 0) {
-            // Clockwise
             NextPress = true;
             DownPress = true;
             NextPagePress = true;
         } else {
-            // Counter-clockwise
             PrevPress = true;
             UpPress = true;
             PrevPagePress = true;
@@ -166,8 +154,8 @@ void InputHandler(void) {
         lastEncoderPos = currentPos;
     }
 
-    // --- Process Encoder Button (SW) ---
-    bool swCurrent = !digitalRead(ENC_SW); // Active LOW
+    // --- Encoder Button (SW) ---
+    bool swCurrent = !digitalRead(ENC_SW);
     
     if (swCurrent && !swWasPressed) {
         swPressTime = millis();
@@ -192,21 +180,16 @@ void InputHandler(void) {
         LongPress = false;
     }
 
-    // --- Legacy button polling (for any code still reading raw pins) ---
-    // These read the encoder pins directly, so rotation triggers them
-    bool _l = digitalRead(L_BTN);  // ENC_DT
-    bool _r = digitalRead(R_BTN);  // ENC_CLK
-    bool _s = digitalRead(SEL_BTN); // ENC_SW
+    // --- Legacy button polling ---
+    bool _l = digitalRead(L_BTN);
+    bool _r = digitalRead(R_BTN);
+    bool _s = digitalRead(SEL_BTN);
 
     if (!_s) {
         tm = millis();
         if (!wakeUpScreen()) AnyKeyPress = true;
         else return;
     }
-    
-    // Note: _l and _r here are raw pin states, not rotation events
-    // The encoder ISR handles rotation, so these are just for
-    // code that explicitly calls digitalRead(L_BTN) / digitalRead(R_BTN)
 }
 
 /*********************************************************************
@@ -223,7 +206,6 @@ void powerOff() {
 void checkReboot() {
     int countDown = 0;
     
-    // Long press encoder SW to power off
     if (digitalRead(ENC_SW) == BTN_ACT) {
         uint32_t time_count = millis();
         while (digitalRead(ENC_SW) == BTN_ACT) {
