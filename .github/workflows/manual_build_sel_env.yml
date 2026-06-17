@@ -1,5 +1,5 @@
 name: Manual Build (Select Environment)
-# All credits to Ninja-Jr @ninjajr
+
 on:
   workflow_dispatch:
     inputs:
@@ -11,7 +11,7 @@ on:
       environment:
         description: 'Select environment to build'
         required: true
-        default: 'lilygo-t-embed-cc1101'
+        default: 'smoochiee-board'
         type: choice
         options:
           - "m5stack-cardputer"
@@ -122,13 +122,11 @@ jobs:
         run: |
           echo "Preparing PlatformIO configuration..."
 
-          # Manual builds always use commit SHA (simple and logical)
           version="${GITHUB_SHA::7}"
           echo "Using commit SHA: $version"
 
           echo "VERSION=$version" >> $GITHUB_OUTPUT
 
-          # Apply version to platformio.ini (upstream method)
           sed -i "s/-DBRUCE_VERSION=/-DBRUCE_VERSION='\"$version\"' ; /g" ./platformio.ini
           sed -i "s/-DGIT_COMMIT_HASH='\"Homebrew\"'/!echo '-DGIT_COMMIT_HASH=\\\\\"'\$(git describe --always --dirty)'\\\\\"'/g" ./platformio.ini
 
@@ -151,7 +149,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Bruce-${{ env.SELECTED_ENV }}
-          path: Bruce-*.*
+          path: |
+            .pio/build/${{ env.SELECTED_ENV }}/bootloader.bin
+            .pio/build/${{ env.SELECTED_ENV }}/partitions.bin
+            .pio/build/${{ env.SELECTED_ENV }}/firmware.bin
           retention-days: 1
           if-no-files-found: error
 
@@ -162,4 +163,4 @@ jobs:
           echo "Version: ${{ steps.prepare_version.outputs.VERSION }}"
           echo "Git Hash: $(git describe --always --dirty)"
           echo "Built files:"
-          ls -la Bruce-*.* 2>/dev/null || echo "No Bruce files found"
+          ls -la .pio/build/${{ env.SELECTED_ENV }}/*.bin 2>/dev/null || echo "No bin files found"
