@@ -13,28 +13,47 @@ XPowersPPM PPM;
 #endif
 
 // ============================================================================
-// KY-040 ENCODER STATE
+// KY-040 ENCODER STATE TABLE (Full Quadrature Debounce)
 // ============================================================================
+// Valid state transitions only — ignores contact bounce and invalid states
+// State = (old_DT << 3 | old_CLK << 2 | new_DT << 1 | new_CLK)
+// Output: -1 (CCW), 0 (invalid/bounce), +1 (CW)
+
+const int8_t ENCODER_STATES[] = {
+    0,  0,  0,  0,   // 0000 to 0011: invalid
+    0,  0,  1,  0,   // 0100: no change, 0101: invalid, 0110: CW, 0111: invalid
+    0, -1,  0,  0,   // 1000: no change, 1001: CCW, 1010: invalid, 1011: invalid
+    0,  0,  0,  0    // 1100 to 1111: invalid
+};
+
 volatile int encoderPos = 0;
 volatile int lastEncoderPos = 0;
-volatile uint8_t lastCLK = 0;
+volatile uint8_t encoderState = 0;
 
 // ============================================================================
 // INTERRUPT SERVICE ROUTINES
 // ============================================================================
 
 void IRAM_ATTR onEncoderCLK() {
-    uint8_t clk = digitalRead(ENC_CLK);
+    // Read current pin states
     uint8_t dt = digitalRead(ENC_DT);
+    uint8_t clk = digitalRead(ENC_CLK);
     
-    if (clk == HIGH && lastCLK == LOW) {
-        if (dt == HIGH) {
-            encoderPos--;
-        } else {
-            encoderPos++;
-        }
-    }
-    lastCLK = clk;
+    // Build 4-bit state: (prev_DT << 3 | prev_CLK << 2 | curr_DT << 1 | curr_CLK)
+    // encoderState holds the previous 2 bits in the upper nibble from last call
+    uint8_t newState = ((encoderState & 0x03) << 2) | (dt << 1) | clk;
+    
+    // Look up valid transition
+    int8_t delta = ENCODER_STATES[newState & 0x0F];
+    encoderPos += delta;
+    
+    // Save current state for next interrupt (shift into upper bits)
+    encoderState = newState & 0x03;
+}
+
+void IRAM_ATTR onEncoderDT() {
+    // Optional: can use both interrupts for higher resolution
+    // For now, CLK interrupt with state table is sufficient
 }
 
 void IRAM_ATTR onEncoderSW() {
@@ -46,20 +65,26 @@ void IRAM_ATTR onEncoderSW() {
 // ============================================================================
 
 void _setup_gpio() {
+    // --- KY-040 Encoder Pins ---
     pinMode(ENC_CLK, INPUT_PULLUP);
     pinMode(ENC_DT, INPUT_PULLUP);
     pinMode(ENC_SW, INPUT_PULLUP);
     
-    lastCLK = digitalRead(ENC_CLK);
+    // Initialize encoder state
+    encoderState = (digitalRead(ENC_DT) << 1) | digitalRead(ENC_CLK);
     
+    // Attach interrupts — CHANGE on both pins for full quadrature
     attachInterrupt(digitalPinToInterrupt(ENC_CLK), onEncoderCLK, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENC_DT), onEncoderDT, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_SW), onEncoderSW, CHANGE);
 
+    // --- RF Module SPI CS (keep for compile compatibility) ---
     pinMode(CC1101_SS_PIN, OUTPUT);
     pinMode(NRF24_SS_PIN, OUTPUT);
     digitalWrite(CC1101_SS_PIN, HIGH);
     digitalWrite(NRF24_SS_PIN, HIGH);
 
+    // --- I2C & PMU ---
     bruceConfigPins.rfModule = CC1101_SPI_MODULE;
     bruceConfigPins.irRx = RXLED;
     Wire.setPins(GROVE_SDA, GROVE_SCL);
@@ -124,10 +149,11 @@ void InputHandler(void) {
     static unsigned long swPressTime = 0;
     static bool swWasPressed = false;
     
-    if (millis() - tm < 50 && !LongPress) return;
+    // Relaxed polling — state table handles the heavy lifting
+    if (millis() - tm < 30 && !LongPress) return;
     tm = millis();
 
-    // --- Encoder Rotation ---
+    // --- Process Encoder Rotation ---
     noInterrupts();
     int currentPos = encoderPos;
     interrupts();
@@ -142,10 +168,12 @@ void InputHandler(void) {
         }
         
         if (delta > 0) {
+            // Clockwise
             NextPress = true;
             DownPress = true;
             NextPagePress = true;
         } else {
+            // Counter-clockwise
             PrevPress = true;
             UpPress = true;
             PrevPagePress = true;
@@ -154,8 +182,8 @@ void InputHandler(void) {
         lastEncoderPos = currentPos;
     }
 
-    // --- Encoder Button (SW) ---
-    bool swCurrent = !digitalRead(ENC_SW);
+    // --- Process Encoder Button (SW) ---
+    bool swCurrent = !digitalRead(ENC_SW); // Active LOW
     
     if (swCurrent && !swWasPressed) {
         swPressTime = millis();
@@ -180,7 +208,7 @@ void InputHandler(void) {
         LongPress = false;
     }
 
-    // --- Legacy button polling ---
+    // --- Legacy button polling (for code that reads raw pins) ---
     bool _l = digitalRead(L_BTN);
     bool _r = digitalRead(R_BTN);
     bool _s = digitalRead(SEL_BTN);
@@ -206,6 +234,7 @@ void powerOff() {
 void checkReboot() {
     int countDown = 0;
     
+    // Long press encoder SW to power off
     if (digitalRead(ENC_SW) == BTN_ACT) {
         uint32_t time_count = millis();
         while (digitalRead(ENC_SW) == BTN_ACT) {
