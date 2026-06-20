@@ -40,14 +40,14 @@ void IRAM_ATTR onEncoderCLK() {
     uint8_t clk = digitalRead(ENC_CLK);
     
     // Build 4-bit state: (prev_DT << 3 | prev_CLK << 2 | curr_DT << 1 | curr_CLK)
-    // encoderState holds the previous 2 bits in the upper nibble from last call
+    // encoderState holds the previous 2 bits from last call
     uint8_t newState = ((encoderState & 0x03) << 2) | (dt << 1) | clk;
     
     // Look up valid transition
     int8_t delta = ENCODER_STATES[newState & 0x0F];
     encoderPos += delta;
     
-    // Save current state for next interrupt (shift into upper bits)
+    // Save current state for next interrupt
     encoderState = newState & 0x03;
 }
 
@@ -70,10 +70,10 @@ void _setup_gpio() {
     pinMode(ENC_DT, INPUT_PULLUP);
     pinMode(ENC_SW, INPUT_PULLUP);
     
-    // Initialize encoder state
+    // Initialize encoder state before attaching interrupts
     encoderState = (digitalRead(ENC_DT) << 1) | digitalRead(ENC_CLK);
     
-    // Attach interrupts — CHANGE on both pins for full quadrature
+    // Attach interrupts
     attachInterrupt(digitalPinToInterrupt(ENC_CLK), onEncoderCLK, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_DT), onEncoderDT, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_SW), onEncoderSW, CHANGE);
