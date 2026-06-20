@@ -26,10 +26,10 @@ static const uint8_t SCL = 48;
 // ============================================================================
 // LEGACY ARDUINO SPI CONSTANTS (required by arduinoespressif32 core)
 // ============================================================================
-static const uint8_t SS   = 3;
+static const uint8_t SS = 3;
 static const uint8_t MOSI = 12;
 static const uint8_t MISO = 11;
-static const uint8_t SCK  = 13;
+static const uint8_t SCK = 13;
 
 // ============================================================================
 // KY-040 ROTARY ENCODER
