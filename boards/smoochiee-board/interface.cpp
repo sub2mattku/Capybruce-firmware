@@ -1,5 +1,10 @@
 #include "core/powerSave.h"
 
+// Fix for FastLED FP macro conflict in PlatformIO build dependencies
+#ifdef FP
+#undef FP
+#endif
+
 /***************************************************************************************
 ** Function name: _setup_gpio()
 ** Location: main.cpp
