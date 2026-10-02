@@ -15,46 +15,47 @@ XPowersPPM PPM;
 // ============================================================================
 // KY-040 ENCODER STATE TABLE (Full Quadrature Debounce)
 // ============================================================================
-// Valid state transitions only — ignores contact bounce and invalid states
-// State = (old_DT << 3 | old_CLK << 2 | new_DT << 1 | new_CLK)
+// State = (prev_DT << 3) | (prev_CLK << 2) | (curr_DT << 1) | (curr_CLK)
 // Output: -1 (CCW), 0 (invalid/bounce), +1 (CW)
 
 const int8_t ENCODER_STATES[] = {
-    0,  0,  0,  0,   // 0000 to 0011: invalid
-    0,  0,  1,  0,   // 0100: no change, 0101: invalid, 0110: CW, 0111: invalid
-    0, -1,  0,  0,   // 1000: no change, 1001: CCW, 1010: invalid, 1011: invalid
-    0,  0,  0,  0    // 1100 to 1111: invalid
+    0,  1, -1,  0,   // 0000, 0001 (+1), 0010 (-1), 0011
+   -1,  0,  0,  1,   // 0100 (-1), 0101, 0110, 0111 (+1)
+    1,  0,  0, -1,   // 1000 (+1), 1001, 1010, 1011 (-1)
+    0, -1,  1,  0    // 1100, 1101 (-1), 1110 (+1), 1111
 };
 
 volatile int encoderPos = 0;
 volatile int lastEncoderPos = 0;
 volatile uint8_t encoderState = 0;
+volatile unsigned long lastEncoderISR = 0;
 
 // ============================================================================
 // INTERRUPT SERVICE ROUTINES
 // ============================================================================
 
-void IRAM_ATTR onEncoderCLK() {
-    // Read current pin states
+void IRAM_ATTR handleEncoderISR() {
+    unsigned long now = micros();
+    // Drop pulses occurring faster than 1.5ms (1500us) contact bounce threshold
+    if (now - lastEncoderISR < 1500) return;
+    lastEncoderISR = now;
+
     uint8_t dt = digitalRead(ENC_DT);
     uint8_t clk = digitalRead(ENC_CLK);
-    
+
     // Build 4-bit state: (prev_DT << 3 | prev_CLK << 2 | curr_DT << 1 | curr_CLK)
-    // encoderState holds the previous 2 bits from last call
     uint8_t newState = ((encoderState & 0x03) << 2) | (dt << 1) | clk;
-    
-    // Look up valid transition
+
+    // Look up valid transition (-1, 0, or +1)
     int8_t delta = ENCODER_STATES[newState & 0x0F];
     encoderPos += delta;
-    
+
     // Save current state for next interrupt
     encoderState = newState & 0x03;
 }
 
-void IRAM_ATTR onEncoderDT() {
-    // Optional: can use both interrupts for higher resolution
-    // For now, CLK interrupt with state table is sufficient
-}
+void IRAM_ATTR onEncoderCLK() { handleEncoderISR(); }
+void IRAM_ATTR onEncoderDT()  { handleEncoderISR(); }
 
 void IRAM_ATTR onEncoderSW() {
     // Handled in polling loop for debounce
@@ -69,11 +70,11 @@ void _setup_gpio() {
     pinMode(ENC_CLK, INPUT_PULLUP);
     pinMode(ENC_DT, INPUT_PULLUP);
     pinMode(ENC_SW, INPUT_PULLUP);
-    
+
     // Initialize encoder state before attaching interrupts
     encoderState = (digitalRead(ENC_DT) << 1) | digitalRead(ENC_CLK);
-    
-    // Attach interrupts
+
+    // Attach interrupts to both pins
     attachInterrupt(digitalPinToInterrupt(ENC_CLK), onEncoderCLK, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_DT), onEncoderDT, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_SW), onEncoderSW, CHANGE);
@@ -88,7 +89,7 @@ void _setup_gpio() {
     bruceConfigPins.rfModule = CC1101_SPI_MODULE;
     bruceConfigPins.irRx = RXLED;
     Wire.setPins(GROVE_SDA, GROVE_SCL);
-    
+
     bool pmu_ret = false;
     Wire.begin(GROVE_SDA, GROVE_SCL);
     pmu_ret = PPM.init(Wire, GROVE_SDA, GROVE_SCL, BQ25896_SLAVE_ADDRESS);
@@ -148,7 +149,7 @@ void InputHandler(void) {
     static unsigned long tm = 0;
     static unsigned long swPressTime = 0;
     static bool swWasPressed = false;
-    
+
     // Relaxed polling — state table handles the heavy lifting
     if (millis() - tm < 30 && !LongPress) return;
     tm = millis();
@@ -157,16 +158,16 @@ void InputHandler(void) {
     noInterrupts();
     int currentPos = encoderPos;
     interrupts();
-    
+
     int delta = currentPos - lastEncoderPos;
-    
+
     if (delta != 0) {
         if (!wakeUpScreen()) AnyKeyPress = true;
         else {
             lastEncoderPos = currentPos;
             return;
         }
-        
+
         if (delta > 0) {
             // Clockwise
             NextPress = true;
@@ -178,20 +179,20 @@ void InputHandler(void) {
             UpPress = true;
             PrevPagePress = true;
         }
-        
+
         lastEncoderPos = currentPos;
     }
 
     // --- Process Encoder Button (SW) ---
     bool swCurrent = !digitalRead(ENC_SW); // Active LOW
-    
+
     if (swCurrent && !swWasPressed) {
         swPressTime = millis();
         swWasPressed = true;
         if (!wakeUpScreen()) AnyKeyPress = true;
         else return;
     }
-    
+
     if (swCurrent && swWasPressed) {
         if (millis() - swPressTime > 800) {
             EscPress = true;
@@ -199,7 +200,7 @@ void InputHandler(void) {
             LongPress = true;
         }
     }
-    
+
     if (!swCurrent && swWasPressed) {
         if (millis() - swPressTime < 800 && millis() - swPressTime > 50) {
             SelPress = true;
@@ -233,7 +234,7 @@ void powerOff() {
 **********************************************************************/
 void checkReboot() {
     int countDown = 0;
-    
+
     // Long press encoder SW to power off
     if (digitalRead(ENC_SW) == BTN_ACT) {
         uint32_t time_count = millis();
@@ -257,7 +258,7 @@ void checkReboot() {
                 delay(10);
             }
         }
-        
+
         delay(30);
         if (millis() - time_count > 500) {
             tft.fillRect(60, 12, tftWidth - 60, tft.fontHeight(1), bruceConfig.bgColor);
