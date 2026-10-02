@@ -122,9 +122,10 @@ static const uint8_t SCK = 13;
 // ============================================================================
 // MISC
 // ============================================================================
-#define FP 1
-#define FM 2
-#define FG 3
+// Prefixed macros to prevent macro collisions with C++ library namespaces (e.g., FastLED)
+#define BOARD_FP 1
+#define BOARD_FM 2
+#define BOARD_FG 3
 
 // ============================================================================
 // RGB LED
