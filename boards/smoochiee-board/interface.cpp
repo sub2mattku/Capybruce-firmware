@@ -1,14 +1,11 @@
 #include "core/powerSave.h"
 
-// Fix for FastLED FP macro conflict in PlatformIO build dependencies
 #ifdef FP
 #undef FP
 #endif
 
 /***************************************************************************************
 ** Function name: _setup_gpio()
-** Location: main.cpp
-** Description:   initial setup for the device
 ***************************************************************************************/
 
 #ifdef XPOWERS_CHIP_BQ25896
@@ -18,52 +15,64 @@ XPowersPPM PPM;
 #endif
 
 // ============================================================================
-// KY-040 ENCODER STATE TABLE (Full Quadrature Debounce)
+// KY-040 ENCODER — QUADRATURE STATE TABLE DECODER
 // ============================================================================
-// State = (prev_DT << 3) | (prev_CLK << 2) | (curr_DT << 1) | (curr_CLK)
-// Output: -1 (CCW), 0 (invalid/bounce), +1 (CW)
-
-const int8_t ENCODER_STATES[] = {
-    0,  1, -1,  0,   // 0000, 0001 (+1), 0010 (-1), 0011
-   -1,  0,  0,  1,   // 0100 (-1), 0101, 0110, 0111 (+1)
-    1,  0,  0, -1,   // 1000 (+1), 1001, 1010, 1011 (-1)
-    0, -1,  1,  0    // 1100, 1101 (-1), 1110 (+1), 1111
+// Index = (prev_DT << 3) | (prev_CLK << 2) | (curr_DT << 1) | curr_CLK
+// +1 = CW, -1 = CCW, 0 = illegal transition (bounce / both pins changed)
+//
+// FIX: read from an ISR -> must be in RAM, not flash-mapped rodata.
+// (Flash cache is disabled during NVS/LittleFS writes; accessing this
+// table from the ISR at that moment hard-faults the ESP32.)
+static DRAM_ATTR const int8_t ENCODER_STATES[16] = {
+    0,  1, -1,  0,
+   -1,  0,  0,  1,
+    1,  0,  0, -1,
+    0, -1,  1,  0
 };
 
-volatile int encoderPos = 0;
-volatile int lastEncoderPos = 0;
-volatile uint8_t encoderState = 0;
-volatile unsigned long lastEncoderISR = 0;
+// One KY-040 detent = one full quadrature cycle = 4 transitions.
+// (Set to 2 only if your encoder is a half-cycle-per-detent type.)
+#define ENC_COUNTS_PER_DETENT 4
+
+static portMUX_TYPE encoderMux = portMUX_INITIALIZER_UNLOCKED;
+
+volatile int     encoderPos     = 0;   // committed detents
+volatile int     lastEncoderPos = 0;   // last count consumed by InputHandler
+volatile int8_t  encoderDelta   = 0;   // transitions since last commit
+volatile uint8_t encoderState   = 0;   // last (DT << 1) | CLK
 
 // ============================================================================
-// INTERRUPT SERVICE ROUTINES
+// ISR — attached to CHANGE of CLK and DT. NO time filter on purpose:
+// the state table IS the debouncer. Every bounce is either an illegal
+// transition (0) or a reversal that cancels the previous count.
 // ============================================================================
-
 void IRAM_ATTR handleEncoderISR() {
-    unsigned long now = micros();
-    // Drop pulses occurring faster than 1.5ms (1500us) contact bounce threshold
-    if (now - lastEncoderISR < 1500) return;
-    lastEncoderISR = now;
+    uint8_t curr = ((uint8_t)digitalRead(ENC_DT) << 1) | (uint8_t)digitalRead(ENC_CLK);
 
-    uint8_t dt = digitalRead(ENC_DT);
-    uint8_t clk = digitalRead(ENC_CLK);
+    portENTER_CRITICAL_ISR(&encoderMux);
 
-    // Build 4-bit state: (prev_DT << 3 | prev_CLK << 2 | curr_DT << 1 | curr_CLK)
-    uint8_t newState = ((encoderState & 0x03) << 2) | (dt << 1) | clk;
+    uint8_t prev = encoderState;
+    if (curr != prev) {                    // edge vanished before we looked -> glitch
+        encoderState = curr;
 
-    // Look up valid transition (-1, 0, or +1)
-    int8_t delta = ENCODER_STATES[newState & 0x0F];
-    encoderPos += delta;
+        int8_t d = ENCODER_STATES[(prev << 2) | curr];
+        if (d != 0) {
+            encoderDelta += d;
 
-    // Save current state for next interrupt
-    encoderState = newState & 0x03;
-}
+            // FIX: commit one UI step per mechanical detent, not per raw
+            // transition (4 raw counts = 1 click). Remainder is carried,
+            // so a rare missed edge never turns into a wrong count.
+            if (encoderDelta >= ENC_COUNTS_PER_DETENT) {
+                encoderPos++;
+                encoderDelta -= ENC_COUNTS_PER_DETENT;
+            } else if (encoderDelta <= -ENC_COUNTS_PER_DETENT) {
+                encoderPos--;
+                encoderDelta += ENC_COUNTS_PER_DETENT;
+            }
+        }
+    }
 
-void IRAM_ATTR onEncoderCLK() { handleEncoderISR(); }
-void IRAM_ATTR onEncoderDT()  { handleEncoderISR(); }
-
-void IRAM_ATTR onEncoderSW() {
-    // Handled in polling loop for debounce
+    portEXIT_CRITICAL_ISR(&encoderMux);
 }
 
 // ============================================================================
@@ -73,16 +82,16 @@ void IRAM_ATTR onEncoderSW() {
 void _setup_gpio() {
     // --- KY-040 Encoder Pins ---
     pinMode(ENC_CLK, INPUT_PULLUP);
-    pinMode(ENC_DT, INPUT_PULLUP);
-    pinMode(ENC_SW, INPUT_PULLUP);
+    pinMode(ENC_DT,  INPUT_PULLUP);
+    pinMode(ENC_SW,  INPUT_PULLUP);
+    delay(10);                             // let pull-ups settle
 
-    // Initialize encoder state before attaching interrupts
     encoderState = (digitalRead(ENC_DT) << 1) | digitalRead(ENC_CLK);
 
-    // Attach interrupts to both pins
-    attachInterrupt(digitalPinToInterrupt(ENC_CLK), onEncoderCLK, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENC_DT), onEncoderDT, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENC_SW), onEncoderSW, CHANGE);
+    // FIX: same decoder on both pins; removed the empty ENC_SW CHANGE ISR
+    // (the switch is debounced by polling in InputHandler).
+    attachInterrupt(digitalPinToInterrupt(ENC_CLK), handleEncoderISR, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENC_DT),  handleEncoderISR, CHANGE);
 
     // --- RF Module SPI CS (keep for compile compatibility) ---
     pinMode(CC1101_SS_PIN, OUTPUT);
@@ -154,60 +163,55 @@ void InputHandler(void) {
     static unsigned long tm = 0;
     static unsigned long swPressTime = 0;
     static bool swWasPressed = false;
+    static bool swLongFired = false;       // FIX: one-shot long press
 
-    // Relaxed polling — state table handles the heavy lifting
     if (millis() - tm < 30 && !LongPress) return;
     tm = millis();
 
-    // --- Process Encoder Rotation ---
-    noInterrupts();
-    int currentPos = encoderPos;
-    interrupts();
+    // --- Encoder Rotation ---
+    int currentPos;
+    portENTER_CRITICAL(&encoderMux);
+    currentPos = encoderPos;
+    portEXIT_CRITICAL(&encoderMux);
 
     int delta = currentPos - lastEncoderPos;
-
     if (delta != 0) {
+        lastEncoderPos = currentPos;       // always sync (wake or not)
+
         if (!wakeUpScreen()) AnyKeyPress = true;
-        else {
-            lastEncoderPos = currentPos;
-            return;
-        }
+        else return;                       // this turn only woke the screen
 
         if (delta > 0) {
-            // Clockwise
-            NextPress = true;
-            DownPress = true;
-            NextPagePress = true;
+            NextPress = true; DownPress = true; NextPagePress = true;
         } else {
-            // Counter-clockwise
-            PrevPress = true;
-            UpPress = true;
-            PrevPagePress = true;
+            PrevPress = true; UpPress = true; PrevPagePress = true;
         }
-
-        lastEncoderPos = currentPos;
     }
 
-    // --- Process Encoder Button (SW) ---
-    bool swCurrent = !digitalRead(ENC_SW); // Active LOW
+    // --- Encoder Button (SW), active LOW ---
+    // 30 ms polling interval + 50 ms minimum press = adequate debounce.
+    bool swCurrent = !digitalRead(ENC_SW);
 
-    if (swCurrent && !swWasPressed) {
+    if (swCurrent && !swWasPressed) {                 // press
         swPressTime = millis();
         swWasPressed = true;
+        swLongFired  = false;
         if (!wakeUpScreen()) AnyKeyPress = true;
         else return;
     }
 
-    if (swCurrent && swWasPressed) {
+    if (swCurrent && swWasPressed && !swLongFired) {  // held
         if (millis() - swPressTime > 800) {
-            EscPress = true;
-            SelPress = false;
+            // FIX: fire EscPress exactly once (old code re-armed it every
+            // iteration, and the 30 ms gate is bypassed while LongPress).
+            swLongFired = true;
             LongPress = true;
+            EscPress  = true;
         }
     }
 
-    if (!swCurrent && swWasPressed) {
-        if (millis() - swPressTime < 800 && millis() - swPressTime > 50) {
+    if (!swCurrent && swWasPressed) {                 // release
+        if (!swLongFired && millis() - swPressTime > 50) {
             SelPress = true;
         }
         swWasPressed = false;
@@ -230,6 +234,8 @@ void InputHandler(void) {
 ** Function: powerOff
 **********************************************************************/
 void powerOff() {
+    detachInterrupt(digitalPinToInterrupt(ENC_CLK));
+    detachInterrupt(digitalPinToInterrupt(ENC_DT));
     esp_sleep_enable_ext0_wakeup((gpio_num_t)ENC_SW, BTN_ACT);
     esp_deep_sleep_start();
 }
@@ -240,7 +246,6 @@ void powerOff() {
 void checkReboot() {
     int countDown = 0;
 
-    // Long press encoder SW to power off
     if (digitalRead(ENC_SW) == BTN_ACT) {
         uint32_t time_count = millis();
         while (digitalRead(ENC_SW) == BTN_ACT) {
